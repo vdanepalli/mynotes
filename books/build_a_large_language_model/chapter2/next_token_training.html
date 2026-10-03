@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GPU Parallelism in LLMs: Deep Dive</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #131b2e;
+      --border: #24324f;
+      --accent-blue: #38bdf8;
+      --accent-green: #34d399;
+      --accent-purple: #c084fc;
+      --accent-amber: #fbbf24;
+      --accent-rose: #fb7185;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text-main);
+      padding: 30px 20px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .app-container {
+      max-width: 1100px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 16px;
+    }
+
+    h1 {
+      font-size: 26px;
+      color: var(--accent-blue);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .tagline {
+      color: var(--text-muted);
+      font-size: 15px;
+      margin-top: 6px;
+      line-height: 1.5;
+    }
+
+    /* STEPPER CONTROLS */
+    .control-panel {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .timeline-steps {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+    }
+
+    .step-indicator {
+      background: #1c2740;
+      border: 1px solid var(--border);
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.25s ease;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .step-indicator.active {
+      background: #0284c7;
+      border-color: var(--accent-blue);
+      color: #ffffff;
+      box-shadow: 0 0 14px rgba(56, 189, 248, 0.4);
+    }
+
+    .step-indicator.done {
+      border-color: var(--accent-green);
+      color: var(--accent-green);
+    }
+
+    .btn-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 10px;
+    }
+
+    button {
+      background: #253350;
+      color: var(--text-main);
+      border: 1px solid var(--border);
+      padding: 10px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background: #33446b;
+    }
+
+    button.primary {
+      background: #0284c7;
+      border-color: var(--accent-blue);
+    }
+    button.primary:hover {
+      background: #0369a1;
+    }
+
+    /* EXPLANATION BANNER */
+    .explanation-card {
+      background: #101728;
+      border-left: 4px solid var(--accent-blue);
+      padding: 16px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .explanation-card h3 {
+      font-size: 16px;
+      color: var(--accent-blue);
+      margin-bottom: 6px;
+    }
+
+    /* HARDWARE VISUALIZATION BOARD */
+    .vis-board {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      min-height: 520px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      position: relative;
+    }
+
+    /* HARDWARE SCHEMATIC */
+    .hardware-overview {
+      display: grid;
+      grid-template-columns: 200px 80px 1fr;
+      align-items: center;
+      gap: 12px;
+      background: #0d1322;
+      padding: 14px;
+      border-radius: 10px;
+      border: 1px dashed var(--border);
+    }
+
+    .cpu-box {
+      border: 1px solid var(--accent-amber);
+      background: rgba(251, 191, 36, 0.05);
+      padding: 12px;
+      border-radius: 8px;
+      text-align: center;
+    }
+
+    .pcie-bus {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      color: var(--accent-blue);
+      font-weight: bold;
+    }
+
+    .bus-wire {
+      width: 100%;
+      height: 4px;
+      background: #334155;
+      position: relative;
+      overflow: hidden;
+      margin: 4px 0;
+    }
+
+    .bus-wire::after {
+      content: '';
+      position: absolute;
+      width: 25px;
+      height: 100%;
+      background: var(--accent-blue);
+      animation: transfer 1.2s infinite linear;
+    }
+
+    @keyframes transfer {
+      0% { left: -25px; }
+      100% { left: 100%; }
+    }
+
+    .gpu-chip-box {
+      border: 1px solid var(--accent-green);
+      background: rgba(52, 211, 153, 0.05);
+      padding: 12px;
+      border-radius: 8px;
+    }
+
+    /* THE 4 PARALLEL LANES (CUDA THREADS) */
+    .lanes-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+
+    .lane-card {
+      background: #0d1322;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      position: relative;
+      transition: all 0.3s;
+    }
+
+    .lane-card.active-lane {
+      border-color: var(--accent-blue);
+      box-shadow: 0 0 15px rgba(56, 189, 248, 0.2);
+    }
+
+    .lane-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--accent-purple);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 6px;
+    }
+
+    .core-pill {
+      background: #231d3d;
+      color: #d8b4fe;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+
+    .data-pill {
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .data-pill .lbl {
+      font-size: 10px;
+      text-transform: uppercase;
+      opacity: 0.7;
+    }
+
+    .pill-input {
+      background: #14284d;
+      color: #7dd3fc;
+      border: 1px solid #0284c7;
+    }
+
+    .pill-target {
+      background: #42163b;
+      color: #f472b6;
+      border: 1px solid #db2777;
+    }
+
+    .pill-pred {
+      background: #0e372a;
+      color: #6ee7b7;
+      border: 1px solid #059669;
+    }
+
+    .pill-loss {
+      background: #3b1d1d;
+      color: #fca5a5;
+      border: 1px solid #ef4444;
+    }
+
+    /* CAUSAL MASK MATRIX SECTION */
+    .mask-section {
+      background: #090e1a;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      display: flex;
+      gap: 24px;
+      align-items: center;
+    }
+
+    .mask-matrix {
+      display: grid;
+      grid-template-columns: repeat(4, 38px);
+      gap: 6px;
+    }
+
+    .mask-cell {
+      width: 38px;
+      height: 38px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      font-weight: bold;
+      font-size: 12px;
+      transition: all 0.3s;
+    }
+
+    .cell-seen {
+      background: rgba(52, 211, 153, 0.2);
+      border: 1px solid var(--accent-green);
+      color: var(--accent-green);
+    }
+
+    .cell-blocked {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      color: #f87171;
+    }
+
+    /* REDUCTION TREE VISUAL */
+    .reduction-section {
+      background: #0d1322;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .tree-row {
+      display: flex;
+      gap: 30px;
+      align-items: center;
+    }
+
+    .reduce-node {
+      background: #1e293b;
+      border: 1px solid var(--border);
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent-blue);
+      transition: all 0.3s;
+    }
+
+    .reduce-node.highlight {
+      border-color: var(--accent-amber);
+      color: var(--accent-amber);
+      transform: scale(1.05);
+    }
+
+    .pulsing-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      margin-right: 6px;
+      animation: pulse 1s infinite alternate;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 0.3; }
+      100% { opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="app-container">
+  <header>
+    <h1>⚡ Inside the GPU: Parallel Next-Token Training</h1>
+    <p class="tagline">
+      How PyTorch transforms <code>x = ["The", "quick", "brown", "fox"]</code> and <code>y = ["quick", "brown", "fox", "jumps"]</code>
+      into 4 parallel training calculations at the exact same clock cycle.
+    </p>
+  </header>
+
+  <!-- STEPPER NAVIGATION -->
+  <div class="control-panel">
+    <div class="timeline-steps">
+      <div class="step-indicator active" id="step-btn-1" onclick="jumpToStep(1)">1. CPU to VRAM</div>
+      <div class="step-indicator" id="step-btn-2" onclick="jumpToStep(2)">2. Core Allocation</div>
+      <div class="step-indicator" id="step-btn-3" onclick="jumpToStep(3)">3. Causal Mask</div>
+      <div class="step-indicator" id="step-btn-4" onclick="jumpToStep(4)">4. Parallel Pass</div>
+      <div class="step-indicator" id="step-btn-5" onclick="jumpToStep(5)">5. Tree Reduction</div>
+    </div>
+
+    <div class="btn-row">
+      <div class="btn-group">
+        <button onclick="prevStep()">◀ Previous</button>
+        <button class="primary" onclick="nextStep()">Next ▶</button>
+      </div>
+      <button id="play-btn" onclick="togglePlay()">Auto Play ⏵</button>
+    </div>
+  </div>
+
+  <!-- EXPLANATION CARD -->
+  <div class="explanation-card" id="explanation-box">
+    <h3 id="exp-title">Step 1: Data Dispatch (CPU RAM → GPU VRAM)</h3>
+    <p id="exp-body">Loading explanation...</p>
+  </div>
+
+  <!-- VISUAL BOARD -->
+  <div class="vis-board" id="vis-board">
+    
+    <!-- HARDWARE SCHEMATIC -->
+    <div class="hardware-overview">
+      <div class="cpu-box">
+        <div style="font-size:11px; color:var(--text-muted); font-weight:700;">HOST SYSTEM</div>
+        <div style="font-weight:700; margin-top:2px;">CPU + RAM</div>
+        <div style="font-size:11px; color:#cbd5e1; margin-top:4px;">Prepares Python Tensors</div>
+      </div>
+      <div class="pcie-bus">
+        PCIe Bus
+        <div class="bus-wire"></div>
+        High Bandwidth
+      </div>
+      <div class="gpu-chip-box">
+        <div style="font-size:11px; color:var(--text-muted); font-weight:700;">DEVICE MEMORY (VRAM) & SMs</div>
+        <div style="font-weight:700; color:var(--accent-green); margin-top:2px;">
+          <span class="pulsing-dot"></span>NVIDIA GPU (Streaming Multiprocessor)
+        </div>
+        <div style="font-size:11px; color:#cbd5e1; margin-top:4px;">
+          Contains thousands of arithmetic ALUs (CUDA cores) executing in lockstep (SIMT).
+        </div>
+      </div>
+    </div>
+
+    <!-- MASK SECTION (Step 3) -->
+    <div class="mask-section" id="mask-ui" style="display:none;">
+      <div class="mask-matrix" id="mask-matrix-grid">
+        <!-- 4x4 matrix generated by JS -->
+      </div>
+      <div style="font-size: 13px; line-height: 1.5; color: #cbd5e1;">
+        <strong style="color:var(--accent-blue);">The Causal Attention Mask (Upper Triangle = -∞):</strong><br>
+        Even though tokens 0, 1, 2, and 3 reside on the GPU chip together, the GPU zeros out the attention scores for future tokens before Softmax. Core 0 mathematically computes with $0.0$ weight for any token ahead of it!
+      </div>
+    </div>
+
+    <!-- THE 4 LANES -->
+    <div class="lanes-grid" id="lanes-container">
+      <!-- Lane 0 -->
+      <div class="lane-card active-lane" id="lane-0">
+        <div class="lane-header">
+          <span>LANE 0 (Index 0)</span>
+          <span class="core-pill" id="core-lbl-0">CUDA Core #104</span>
+        </div>
+        <div class="data-pill pill-input">
+          <div><div class="lbl">Input $x[0]$</div>"The" <span style="font-size:11px; opacity:0.6;">(ID 101)</span></div>
+        </div>
+        <div class="data-pill pill-pred" id="pred-0" style="opacity:0.3;">
+          <div><div class="lbl">Model Guess</div><span id="pred-txt-0">Pending...</span></div>
+        </div>
+        <div class="data-pill pill-target">
+          <div><div class="lbl">Target $y[0]$</div>"quick" <span style="font-size:11px; opacity:0.6;">(ID 204)</span></div>
+        </div>
+        <div class="data-pill pill-loss" id="loss-0" style="opacity:0.3;">
+          <div><div class="lbl">Cross-Entropy Loss</div><span id="loss-txt-0">-ln(P)</span></div>
+        </div>
+      </div>
+
+      <!-- Lane 1 -->
+      <div class="lane-card active-lane" id="lane-1">
+        <div class="lane-header">
+          <span>LANE 1 (Index 1)</span>
+          <span class="core-pill" id="core-lbl-1">CUDA Core #105</span>
+        </div>
+        <div class="data-pill pill-input">
+          <div><div class="lbl">Input $x[1]$</div>"quick" <span style="font-size:11px; opacity:0.6;">(ID 204)</span></div>
+        </div>
+        <div class="data-pill pill-pred" id="pred-1" style="opacity:0.3;">
+          <div><div class="lbl">Model Guess</div><span id="pred-txt-1">Pending...</span></div>
+        </div>
+        <div class="data-pill pill-target">
+          <div><div class="lbl">Target $y[1]$</div>"brown" <span style="font-size:11px; opacity:0.6;">(ID 315)</span></div>
+        </div>
+        <div class="data-pill pill-loss" id="loss-1" style="opacity:0.3;">
+          <div><div class="lbl">Cross-Entropy Loss</div><span id="loss-txt-1">-ln(P)</span></div>
+        </div>
+      </div>
+
+      <!-- Lane 2 -->
+      <div class="lane-card active-lane" id="lane-2">
+        <div class="lane-header">
+          <span>LANE 2 (Index 2)</span>
+          <span class="core-pill" id="core-lbl-2">CUDA Core #106</span>
+        </div>
+        <div class="data-pill pill-input">
+          <div><div class="lbl">Input $x[2]$</div>"brown" <span style="font-size:11px; opacity:0.6;">(ID 315)</span></div>
+        </div>
+        <div class="data-pill pill-pred" id="pred-2" style="opacity:0.3;">
+          <div><div class="lbl">Model Guess</div><span id="pred-txt-2">Pending...</span></div>
+        </div>
+        <div class="data-pill pill-target">
+          <div><div class="lbl">Target $y[2]$</div>"fox" <span style="font-size:11px; opacity:0.6;">(ID 82)</span></div>
+        </div>
+        <div class="data-pill pill-loss" id="loss-2" style="opacity:0.3;">
+          <div><div class="lbl">Cross-Entropy Loss</div><span id="loss-txt-2">-ln(P)</span></div>
+        </div>
+      </div>
+
+      <!-- Lane 3 -->
+      <div class="lane-card active-lane" id="lane-3">
+        <div class="lane-header">
+          <span>LANE 3 (Index 3)</span>
+          <span class="core-pill" id="core-lbl-3">CUDA Core #107</span>
+        </div>
+        <div class="data-pill pill-input">
+          <div><div class="lbl">Input $x[3]$</div>"fox" <span style="font-size:11px; opacity:0.6;">(ID 82)</span></div>
+        </div>
+        <div class="data-pill pill-pred" id="pred-3" style="opacity:0.3;">
+          <div><div class="lbl">Model Guess</div><span id="pred-txt-3">Pending...</span></div>
+        </div>
+        <div class="data-pill pill-target">
+          <div><div class="lbl">Target $y[3]$</div>"jumps" <span style="font-size:11px; opacity:0.6;">(ID 991)</span></div>
+        </div>
+        <div class="data-pill pill-loss" id="loss-3" style="opacity:0.3;">
+          <div><div class="lbl">Cross-Entropy Loss</div><span id="loss-txt-3">-ln(P)</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- REDUCTION TREE (Step 5) -->
+    <div class="reduction-section" id="reduction-ui" style="display:none;">
+      <div style="font-size: 13px; font-weight:700; color:var(--accent-purple);">
+        GPU Parallel Reduction Tree (Logarithmic Sum)
+      </div>
+      <div class="tree-row">
+        <div class="reduce-node" id="rn-0">L0: 1.20</div>
+        <div class="reduce-node" id="rn-1">L1: 0.85</div>
+        <div class="reduce-node" id="rn-2">L2: 1.45</div>
+        <div class="reduce-node" id="rn-3">L3: 0.50</div>
+      </div>
+      <div style="color:var(--text-muted); font-size:12px;">▼ Warp Shuffle / Addition Step 1 ▼</div>
+      <div class="tree-row">
+        <div class="reduce-node" id="rn-pair-1">L0 + L1 = 2.05</div>
+        <div class="reduce-node" id="rn-pair-2">L2 + L3 = 1.95</div>
+      </div>
+      <div style="color:var(--text-muted); font-size:12px;">▼ Warp Shuffle / Addition Step 2 ▼</div>
+      <div class="tree-row">
+        <div class="reduce-node" id="rn-total" style="border-color:var(--accent-green); color:var(--accent-green); font-size:15px;">
+          Total Batch Loss: 4.00 / 4 = 1.000
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  let currentStep = 1;
+  let isPlaying = false;
+  let playInterval = null;
+
+  const stepDetails = {
+    1: {
+      title: "Step 1: Data Transfer over PCIe Bus to GPU VRAM",
+      body: "<strong>What is happening?</strong> Your Python code on the CPU prepares two 1D integer tensors: <code>inputs = [101, 204, 315, 82]</code> and <code>targets = [204, 315, 82, 991]</code>.<br>When you execute <code>inputs.to('cuda')</code>, the CPU sends these arrays across the high-speed PCIe motherboard bus directly into the GPU's high-bandwidth on-board memory (VRAM). Both arrays now sit in fast memory, ready for the GPU's thousands of math cores."
+    },
+    2: {
+      title: "Step 2: Assigning Sequence Slots to Hardware CUDA Cores",
+      body: "<strong>Why does a GPU beat a CPU?</strong> A CPU has 8–16 complex cores that run loops one item at a time (e.g. <code>for t in range(4):</code>).<br>A GPU has thousands of smaller arithmetic units grouped into Streaming Multiprocessors (SMs). The GPU schedules a thread warp where <strong>4 distinct hardware cores</strong> are assigned to positions 0, 1, 2, and 3 simultaneously. Each core handles exactly one token index!"
+    },
+    3: {
+      title: "Step 3: The Causal Mask Prevents Cheating",
+      body: "<strong>How do we stop Lane 0 from peeking ahead?</strong> Look at the 4×4 Attention Grid below. Green checkmarks mean 'visible'; Red 0.0 means 'blocked'.<br>• Lane 0 (sees only 'The') has tokens 1, 2, 3 mathematically set to $-\\infty$ (0 weight after softmax).<br>• Lane 3 sees all tokens.<br>Because the mask is hardcoded into the matrix math, the GPU computes all 4 token representations concurrently without leaking future tokens."
+    },
+    4: {
+      title: "Step 4: The Parallel Forward Pass (All 4 Output Predictions at Once)",
+      body: "<strong>The magic moment:</strong> In a single clock cycle, all 4 cores execute the neural network's linear projection layers.<br>• Lane 0 emits logits predicting <strong>'quick'</strong>.<br>• Lane 1 emits logits predicting <strong>'brown'</strong>.<br>• Lane 2 emits logits predicting <strong>'fox'</strong>.<br>• Lane 3 emits logits predicting <strong>'jumps'</strong>.<br>Four complete predictions are created in one calculation!"
+    },
+    5: {
+      title: "Step 5: Parallel Cross-Entropy Loss & Reduction Tree",
+      body: "<strong>Grading all 4 answers at once:</strong> Instead of calculating loss 4 times, each core computes <code>-ln(P(target))</code> independently in parallel.<br>The GPU then performs a <strong>binary reduction tree</strong> (using warp-shuffle instructions): it adds the 4 loss values pairwise in just $\\log_2(4) = 2$ clock steps. The final scalar loss is sent directly to the optimizer for backpropagation!"
+    }
+  };
+
+  function updateUI() {
+    // Update step indicator tabs
+    for (let i = 1; i <= 5; i++) {
+      const btn = document.getElementById(`step-btn-${i}`);
+      btn.classList.toggle('active', i === currentStep);
+      btn.classList.toggle('done', i < currentStep);
+    }
+
+    // Update text
+    document.getElementById('exp-title').innerHTML = stepDetails[currentStep].title;
+    document.getElementById('exp-body').innerHTML = stepDetails[currentStep].body;
+
+    // Visibility toggles
+    const maskUI = document.getElementById('mask-ui');
+    const reductionUI = document.getElementById('reduction-ui');
+    const lanes = document.getElementById('lanes-container');
+
+    // Reset default styles
+    maskUI.style.display = (currentStep === 3) ? 'flex' : 'none';
+    reductionUI.style.display = (currentStep === 5) ? 'flex' : 'none';
+
+    // Step-specific lane updates
+    for (let i = 0; i < 4; i++) {
+      const predBox = document.getElementById(`pred-${i}`);
+      const lossBox = document.getElementById(`loss-${i}`);
+      const predTxt = document.getElementById(`pred-txt-${i}`);
+      const lossTxt = document.getElementById(`loss-txt-${i}`);
+      const laneCard = document.getElementById(`lane-${i}`);
+
+      if (currentStep >= 4) {
+        predBox.style.opacity = '1';
+        predTxt.innerHTML = ["\"quick\" (P=0.30)", "\"brown\" (P=0.42)", "\"fox\" (P=0.23)", "\"jumps\" (P=0.60)"][i];
+      } else {
+        predBox.style.opacity = '0.3';
+        predTxt.innerHTML = "Pending forward pass...";
+      }
+
+      if (currentStep === 5) {
+        lossBox.style.opacity = '1';
+        lossTxt.innerHTML = ["1.20", "0.85", "1.45", "0.50"][i];
+      } else {
+        lossBox.style.opacity = '0.3';
+        lossTxt.innerHTML = "-ln(P)";
+      }
+
+      laneCard.classList.toggle('active-lane', true);
+    }
+
+    if (currentStep === 3) {
+      renderMaskMatrix();
+    }
+  }
+
+  function renderMaskMatrix() {
+    const grid = document.getElementById('mask-matrix-grid');
+    grid.innerHTML = '';
+    // 4x4 matrix
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 4; c++) {
+        const cell = document.createElement('div');
+        cell.className = 'mask-cell';
+        if (c <= r) {
+          cell.classList.add('cell-seen');
+          cell.innerText = '✓';
+          cell.title = `Token ${r} can attend to Token ${c}`;
+        } else {
+          cell.classList.add('cell-blocked');
+          cell.innerText = '0.0';
+          cell.title = `Future token blocked by causal mask`;
+        }
+        grid.appendChild(cell);
+      }
+    }
+  }
+
+  function nextStep() {
+    if (currentStep < 5) {
+      currentStep++;
+      updateUI();
+    } else if (isPlaying) {
+      togglePlay();
+    }
+  }
+
+  function prevStep() {
+    if (currentStep > 1) {
+      currentStep--;
+      updateUI();
+    }
+  }
+
+  function jumpToStep(step) {
+    currentStep = step;
+    updateUI();
+  }
+
+  function togglePlay() {
+    isPlaying = !isPlaying;
+    const btn = document.getElementById('play-btn');
+    if (isPlaying) {
+      btn.innerText = 'Pause ⏸';
+      btn.style.background = '#e11d48';
+      playInterval = setInterval(() => {
+        if (currentStep < 5) {
+          nextStep();
+        } else {
+          currentStep = 1;
+          updateUI();
+        }
+      }, 3000);
+    } else {
+      btn.innerText = 'Auto Play ⏵';
+      btn.style.background = '#253350';
+      clearInterval(playInterval);
+    }
+  }
+
+  // Initial load
+  updateUI();
+</script>
+
+</body>
+</html>

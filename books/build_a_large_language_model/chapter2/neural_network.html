@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Understanding Backpropagation & PyTorch Autograd</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --border: #e2e8f0;
+      --text: #0f172a;
+      --muted: #64748b;
+      --blue: #0284c7;
+      --blue-light: #e0f2fe;
+      --rose: #e11d48;
+      --rose-light: #ffe4e6;
+      --amber: #d97706;
+      --amber-light: #fef3c7;
+      --emerald: #059669;
+      --emerald-light: #d1fae5;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      line-height: 1.6;
+      padding: 32px 16px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .container {
+      max-width: 980px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+    }
+
+    header {
+      border-bottom: 2px solid var(--border);
+      padding-bottom: 18px;
+    }
+
+    h1 {
+      font-size: 26px;
+      font-weight: 800;
+      color: var(--text);
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 15px;
+      margin-top: 6px;
+    }
+
+    /* CARD SYSTEM */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+
+    .card-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* GUIDED STEPPER */
+    .stepper {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .step-btn {
+      flex: 1;
+      min-width: 140px;
+      padding: 10px 14px;
+      background: #f1f5f9;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      cursor: pointer;
+      text-align: left;
+      transition: all 0.15s ease;
+    }
+
+    .step-btn:hover { background: #e2e8f0; color: var(--text); }
+    .step-btn.active {
+      background: var(--blue-light);
+      border-color: var(--blue);
+      color: var(--blue);
+    }
+
+    /* SPLIT VIEW */
+    .split-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+
+    @media (max-width: 768px) {
+      .split-grid { grid-template-columns: 1fr; }
+    }
+
+    /* CANVAS FOR LOSS CURVE */
+    .canvas-container {
+      position: relative;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 260px;
+    }
+
+    /* SLIDERS & CONTROLS */
+    .control-row {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .slider-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .slider-item input[type="range"] {
+      flex: 1;
+      cursor: pointer;
+    }
+
+    .val-display {
+      font-family: var(--font-mono);
+      font-weight: 700;
+      color: var(--blue);
+      min-width: 45px;
+      text-align: right;
+    }
+
+    /* COMPUTATION GRAPH DIAGRAM */
+    .comp-graph {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .graph-nodes {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+
+    .node {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fafafa;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    .node.active-forward {
+      border-color: var(--blue);
+      background: var(--blue-light);
+    }
+
+    .node.active-backward {
+      border-color: var(--rose);
+      background: var(--rose-light);
+    }
+
+    .node-header {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .node-main {
+      font-size: 15px;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .node-sub {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--muted);
+    }
+
+    /* MATH EXPLANATION BOX */
+    .math-callout {
+      background: #f1f5f9;
+      border-left: 4px solid var(--blue);
+      padding: 14px 18px;
+      border-radius: 0 8px 8px 0;
+      font-size: 14px;
+    }
+
+    .math-callout strong { color: var(--text); }
+    .math-callout.backward-mode {
+      border-left-color: var(--rose);
+      background: #fff1f2;
+    }
+    .math-callout.step-mode {
+      border-left-color: var(--emerald);
+      background: #ecfdf5;
+    }
+
+    /* CODE SECTION */
+    .code-box {
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 16px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.8;
+      overflow-x: auto;
+    }
+
+    .code-line {
+      display: block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+
+    .code-line.highlight {
+      background: #1e293b;
+      border-left: 3px solid var(--amber);
+      color: #fde047;
+      font-weight: 700;
+    }
+
+    .btn-action {
+      background: var(--blue);
+      color: #ffffff;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.15s;
+    }
+
+    .btn-action:hover { background: #0369a1; }
+    .btn-action.btn-green { background: var(--emerald); }
+    .btn-action.btn-green:hover { background: #047857; }
+    .btn-action.btn-secondary {
+      background: #e2e8f0;
+      color: var(--text);
+    }
+    .btn-action.btn-secondary:hover { background: #cbd5e1; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>Training a Neural Network: Backpropagation & Autograd</h1>
+    <p class="subtitle">
+      Appendix A.4 from <em>Build a Large Language Model (from Scratch)</em> by Sebastian Raschka.<br>
+      <strong>The Goal:</strong> Find weight $w$ and bias $b$ so that given input $x = 2.0$, the output equals target $y = 10.0$.
+    </p>
+  </header>
+
+  <!-- STEP-BY-STEP GUIDED TOUR -->
+  <div class="card">
+    <div class="card-title">Walkthrough: The 5 Steps of Every Training Loop</div>
+    <div class="stepper">
+      <button class="step-btn active" id="sbtn-1" onclick="selectStep(1)">1. Initialize Knobs</button>
+      <button class="step-btn" id="sbtn-2" onclick="selectStep(2)">2. Forward Pass (Guess)</button>
+      <button class="step-btn" id="sbtn-3" onclick="selectStep(3)">3. Compute Loss (Error)</button>
+      <button class="step-btn" id="sbtn-4" onclick="selectStep(4)">4. Backward (Slope/Chain Rule)</button>
+      <button class="step-btn" id="sbtn-5" onclick="selectStep(5)">5. Optimizer Step (Nudge)</button>
+    </div>
+
+    <div class="math-callout" id="callout-box">
+      <!-- Dynamic narrative text -->
+    </div>
+  </div>
+
+  <!-- DUAL-VIEW INTERACTIVE STAGE -->
+  <div class="split-grid">
+    
+    <!-- LEFT: THE LOSS LANDSCAPE CURVE -->
+    <div class="card">
+      <div class="card-title">
+        <span>Geometric View: The Loss Bowl ($L$ vs $w$)</span>
+      </div>
+      <p style="font-size: 12px; color: var(--muted); margin-bottom: 12px;">
+        The red dot is your model. The dotted line is the slope (derivative $\frac{\partial L}{\partial w}$). 
+        Notice that a <strong>negative slope</strong> tilts down to the right—meaning you must increase $w$ to reach the valley!
+      </p>
+
+      <div class="canvas-container">
+        <canvas id="curveCanvas" width="450" height="260"></canvas>
+      </div>
+
+      <div class="control-row">
+        <div class="slider-item">
+          <label>Adjust Weight ($w$):</label>
+          <input type="range" id="wSlider" min="1.0" max="7.0" step="0.05" value="3.0" oninput="onManualSlider()">
+          <span class="val-display" id="wVal">3.00</span>
+        </div>
+        <div class="slider-item">
+          <label>Learning Rate ($\eta$):</label>
+          <input type="range" id="lrSlider" min="0.01" max="0.15" step="0.01" value="0.05" oninput="onLRChange()">
+          <span class="val-display" id="lrVal">0.05</span>
+        </div>
+      </div>
+
+      <div style="margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end;">
+        <button class="btn-action btn-secondary" onclick="resetDefaults()">Reset to w = 3.0</button>
+        <button class="btn-action btn-green" onclick="stepOptimizer()">Apply 1 Gradient Step ➔</button>
+      </div>
+    </div>
+
+    <!-- RIGHT: THE COMPUTATION GRAPH & CHAIN RULE -->
+    <div class="card">
+      <div class="card-title">Computation Graph: Numbers & Derivatives</div>
+      
+      <div class="comp-graph">
+        <div class="graph-nodes">
+          <div class="node" id="node-x">
+            <span class="node-header">Input (x)</span>
+            <span class="node-main">2.00</span>
+            <span class="node-sub">Fixed</span>
+          </div>
+          <div class="node" id="node-w">
+            <span class="node-header">Weight (w)</span>
+            <span class="node-main" id="n-w">3.00</span>
+            <span class="node-sub" id="n-wgrad">grad: ?</span>
+          </div>
+          <div class="node" id="node-pred">
+            <span class="node-header">Guess (ŷ)</span>
+            <span class="node-main" id="n-pred">7.00</span>
+            <span class="node-sub">w·x + b</span>
+          </div>
+          <div class="node" id="node-loss">
+            <span class="node-header">Loss (L)</span>
+            <span class="node-main" id="n-loss" style="color:var(--rose);">9.00</span>
+            <span class="node-sub">(ŷ - 10)²</span>
+          </div>
+        </div>
+
+        <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 12px; margin-top: 8px;">
+          <div style="font-weight: 700; margin-bottom: 4px; color: var(--text);">Chain Rule Breakdown:</div>
+          <div style="font-family: var(--font-mono); line-height: 1.6;" id="chain-rule-text">
+            ∂L/∂w = (∂L/∂ŷ) × (∂ŷ/∂w)<br>
+            ∂L/∂w = 2·(ŷ - y) × x<br>
+            ∂L/∂w = 2·(7.0 - 10.0) × 2.0 = <strong>-12.00</strong>
+          </div>
+        </div>
+      </div>
+
+      <!-- CORRESPONDING PYTORCH CODE -->
+      <div style="margin-top: 16px;">
+        <div style="font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--muted); margin-bottom: 6px;">
+          PyTorch Code Mapping (Appendix A.4):
+        </div>
+        <div class="code-box">
+          <span class="code-line" id="code-1">w = torch.tensor(3.0, requires_grad=True)</span>
+          <span class="code-line" id="code-2">optimizer.zero_grad()</span>
+          <span class="code-line" id="code-3">y_pred = w * x + b   # Forward pass</span>
+          <span class="code-line" id="code-4">loss = (y_pred - target)**2   # Compute loss</span>
+          <span class="code-line" id="code-5">loss.backward()   # Compute gradients</span>
+          <span class="code-line" id="code-6">optimizer.step()  # Update weights</span>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+<script>
+  // State
+  const x = 2.0;
+  const target = 10.0;
+  const b = 1.0;
+  let w = 3.0;
+  let lr = 0.05;
+  let currentStep = 1;
+
+  const canvas = document.getElementById('curveCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // Compute forward values
+  function compute(wVal) {
+    const y_hat = wVal * x + b;
+    const loss = Math.pow(y_hat - target, 2);
+    const dL_dyhat = 2 * (y_hat - target);
+    const dL_dw = dL_dyhat * x; // Chain rule
+    return { y_hat, loss, dL_dyhat, dL_dw };
+  }
+
+  // Draw Loss Curve and Tangent Line
+  function drawLossCurve() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const pad = 36;
+    const wMin = 1.0, wMax = 7.0;
+    const lMax = 65.0; // max loss to fit on scale
+
+    function toScreenX(wVal) {
+      return pad + ((wVal - wMin) / (wMax - wMin)) * (canvas.width - 2 * pad);
+    }
+    function toScreenY(lossVal) {
+      const clamped = Math.min(Math.max(lossVal, 0), lMax);
+      return canvas.height - pad - (clamped / lMax) * (canvas.height - 2 * pad);
+    }
+
+    // Axes
+    ctx.strokeStyle = "#cbd5e1";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    // X axis
+    ctx.moveTo(pad, canvas.height - pad);
+    ctx.lineTo(canvas.width - pad, canvas.height - pad);
+    // Y axis
+    ctx.moveTo(pad, pad);
+    ctx.lineTo(pad, canvas.height - pad);
+    ctx.stroke();
+
+    // Axis labels
+    ctx.fillStyle = "#64748b";
+    ctx.font = "10px sans-serif";
+    ctx.fillText("w = 1.0", pad, canvas.height - pad + 16);
+    ctx.fillText("w = 4.5 (Target)", toScreenX(4.5) - 30, canvas.height - pad + 16);
+    ctx.fillText("w = 7.0", canvas.width - pad - 35, canvas.height - pad + 16);
+    ctx.fillText("Loss (L)", 6, pad + 10);
+
+    // Target vertical dashed line (Optimal w = (10 - 1) / 2 = 4.5)
+    ctx.strokeStyle = "#94a3b8";
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(toScreenX(4.5), pad);
+    ctx.lineTo(toScreenX(4.5), canvas.height - pad);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Draw the quadratic parabola L(w) = (2w + 1 - 10)^2 = (2w - 9)^2
+    ctx.strokeStyle = "#0284c7";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    for (let curW = wMin; curW <= wMax; curW += 0.05) {
+      const curL = Math.pow(curW * x + b - target, 2);
+      const sx = toScreenX(curW);
+      const sy = toScreenY(curL);
+      if (curW === wMin) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+
+    // Current point on curve
+    const state = compute(w);
+    const px = toScreenX(w);
+    const py = toScreenY(state.loss);
+
+    // Tangent Line representing slope (dL/dw)
+    // Scale slope for screen drawing
+    const slopeScale = 0.8;
+    const dx = 28;
+    const dy = -state.dL_dw * slopeScale; // in screen Y, down is positive
+
+    ctx.strokeStyle = "#e11d48";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(px - dx, py - dy);
+    ctx.lineTo(px + dx, py + dy);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Current Position Ball
+    ctx.fillStyle = "#e11d48";
+    ctx.beginPath();
+    ctx.arc(px, py, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#ffffff";
+    ctx.stroke();
+
+    // Label showing coordinates
+    ctx.fillStyle = "#0f172a";
+    ctx.font = "bold 11px monospace";
+    ctx.fillText(`w=${w.toFixed(2)}, Loss=${state.loss.toFixed(1)}`, px + 10, py - 10);
+  }
+
+  // Update UI Elements
+  function updateUI() {
+    const s = compute(w);
+
+    document.getElementById('wSlider').value = w;
+    document.getElementById('wVal').innerText = w.toFixed(2);
+    document.getElementById('lrVal').innerText = lr.toFixed(2);
+
+    document.getElementById('n-w').innerText = w.toFixed(2);
+    document.getElementById('n-pred').innerText = s.y_hat.toFixed(2);
+    document.getElementById('n-loss').innerText = s.loss.toFixed(2);
+    document.getElementById('n-wgrad').innerText = (currentStep >= 4) ? `grad: ${s.dL_dw.toFixed(2)}` : "grad: ?";
+
+    // Chain rule explanation box
+    document.getElementById('chain-rule-text').innerHTML = 
+      `1. ∂L/∂ŷ = 2·(ŷ - y) = 2·(${s.y_hat.toFixed(2)} - 10.0) = <strong>${s.dL_dyhat.toFixed(2)}</strong><br>` +
+      `2. ∂ŷ/∂w = x = <strong>${x.toFixed(1)}</strong><br>` +
+      `3. Chain Rule: ∂L/∂w = (${s.dL_dyhat.toFixed(2)}) × (${x.toFixed(1)}) = <strong style="color:var(--rose);">${s.dL_dw.toFixed(2)}</strong>`;
+
+    drawLossCurve();
+  }
+
+  const stepInfo = {
+    1: {
+      title: "Step 1: Initialize Parameters (The Knobs)",
+      text: "We define our parameter <code>w = 3.0</code>. In PyTorch, we tag it with <code>requires_grad=True</code> so PyTorch tracks all mathematical operations on it.",
+      codeHighlight: "code-1",
+      nodes: ["node-w"]
+    },
+    2: {
+      title: "Step 2: Forward Pass (Compute Prediction)",
+      text: "The data flows forward: <code>y_pred = w * x + b = 3.0 * 2.0 + 1.0 = 7.00</code>. Our model guesses <strong>7.00</strong>. Because the target is 10.00, it guessed too low.",
+      codeHighlight: "code-3",
+      nodes: ["node-x", "node-w", "node-pred"]
+    },
+    3: {
+      title: "Step 3: Compute Loss (Measure the Penalty)",
+      text: "We compare the guess with the target: <code>Loss = (7.0 - 10.0)² = 9.00</code>. On the left graph, look at the red dot: it sits high on the bowl at Loss = 9.0.",
+      codeHighlight: "code-4",
+      nodes: ["node-pred", "node-loss"]
+    },
+    4: {
+      title: "Step 4: Backward Pass (Chain Rule & Slope)",
+      text: "<strong>This is the core insight of backprop:</strong> We look at the slope of the bowl at our current position. The slope is <strong>-12.00</strong> (represented by the dashed red tangent line). A negative slope means: <em>'Moving right goes downhill towards zero error!'</em>",
+      codeHighlight: "code-5",
+      nodes: ["node-loss", "node-pred", "node-w"]
+    },
+    5: {
+      title: "Step 5: Optimizer Step (Nudge the Knob)",
+      text: "We update: <code>w = w - (learning_rate * gradient) = 3.0 - (0.05 * -12.0) = 3.60</code>. Because the gradient was negative, subtracting a negative <strong>increases</strong> w, sliding the ball down the bowl!",
+      codeHighlight: "code-6",
+      nodes: ["node-w"]
+    }
+  };
+
+  function selectStep(stepNum) {
+    currentStep = stepNum;
+
+    // Button states
+    for (let i = 1; i <= 5; i++) {
+      document.getElementById(`sbtn-${i}`).classList.toggle('active', i === stepNum);
+    }
+
+    const info = stepInfo[stepNum];
+    const callout = document.getElementById('callout-box');
+    callout.className = "math-callout " + (stepNum === 4 ? "backward-mode" : (stepNum === 5 ? "step-mode" : ""));
+    callout.innerHTML = `<strong>${info.title}:</strong> ${info.text}`;
+
+    // Highlight code line
+    for (let i = 1; i <= 6; i++) {
+      document.getElementById(`code-${i}`).classList.remove('highlight');
+    }
+    if (info.codeHighlight) {
+      document.getElementById(info.codeHighlight).classList.add('highlight');
+    }
+
+    // Highlight nodes
+    document.querySelectorAll('.node').forEach(n => n.classList.remove('active-forward', 'active-backward'));
+    info.nodes.forEach(id => {
+      const el = document.getElementById(id);
+      if (stepNum === 4) el.classList.add('active-backward');
+      else el.classList.add('active-forward');
+    });
+
+    updateUI();
+  }
+
+  function onManualSlider() {
+    w = parseFloat(document.getElementById('wSlider').value);
+    updateUI();
+  }
+
+  function onLRChange() {
+    lr = parseFloat(document.getElementById('lrSlider').value);
+    updateUI();
+  }
+
+  function stepOptimizer() {
+    const s = compute(w);
+    // Gradient descent step
+    w = w - lr * s.dL_dw;
+    // Bound w to slider range
+    w = Math.max(1.0, Math.min(7.0, w));
+    selectStep(5);
+    updateUI();
+  }
+
+  function resetDefaults() {
+    w = 3.0;
+    selectStep(1);
+    updateUI();
+  }
+
+  // Initial load
+  selectStep(1);
+</script>
+
+</body>
+</html>
