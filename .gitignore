@@ -1,0 +1,12 @@
+.venv
+.python-version
+.pyc
+.DS_Store
+
+pyproject.toml
+uv.lock
+
+__pycache__
+
+hydrant_data
+
